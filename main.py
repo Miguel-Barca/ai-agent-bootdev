@@ -38,34 +38,63 @@ def main():
 
 
 def generate_content(client, messages, verbose):
-    response = client.models.generate_content(
-        model="gemini-2.0-flash-001",
-        contents=messages,
-        config=types.GenerateContentConfig(
-            tools=[available_functions], system_instruction=system_prompt
-        ),
-    )
-    if verbose:
-        print("Prompt tokens:", response.usage_metadata.prompt_token_count)
-        print("Response tokens:", response.usage_metadata.candidates_token_count)
+    MAX_ITERATIONS = 20
 
-    if not response.function_calls:
-        return response.text
+    try:
+        for i in range(MAX_ITERATIONS):
+            if verbose:
+                print(f"\n--- Iteration {i+1} ---")
 
-    function_responses = []
-    for function_call_part in response.function_calls:
-        function_call_result = call_function(function_call_part, verbose)
-        if (
-            not function_call_result.parts
-            or not function_call_result.parts[0].function_response
-        ):
-            raise Exception("empty function call result")
-        if verbose:
-            print(f"-> {function_call_result.parts[0].function_response.response}")
-        function_responses.append(function_call_result.parts[0])
+            response = client.models.generate_content(
+                model="gemini-2.0-flash-001",
+                contents=messages,
+                config=types.GenerateContentConfig(
+                    tools=[available_functions],
+                    system_instruction=system_prompt,
+                ),
+            )
 
-    if not function_responses:
-        raise Exception("no function responses generated, exiting.")
+            if verbose:
+                print("Prompt tokens:", response.usage_metadata.prompt_token_count)
+                print("Response tokens:", response.usage_metadata.candidates_token_count)
+
+            # Add LLM's reasoning message(s)
+            for candidate in response.candidates:
+                if candidate.content:
+                    messages.append(candidate.content)
+
+            # ✅ Improved: stop only if it's truly a final response
+            if response.text and not response.function_calls:
+                print("\nFinal response:")
+                print(response.text)
+                break
+
+
+            # Handle function calls (tool use)
+            if response.function_calls:
+                for function_call_part in response.function_calls:
+                    function_call_result = call_function(function_call_part, verbose)
+
+                    if (
+                        not function_call_result.parts
+                        or not function_call_result.parts[0].function_response
+                    ):
+                        raise Exception("empty function call result")
+
+                    if verbose:
+                        print(f"-> {function_call_result.parts[0].function_response.response}")
+
+                    # Add tool output to conversation
+                    messages.append(function_call_result)
+            else:
+                print("No function calls and no final response. Exiting.")
+                break
+        else:
+            print("Max iterations reached without a final response.")
+
+    except Exception as e:
+        print(f"Error during content generation: {e}")
+
 
 
 if __name__ == "__main__":
